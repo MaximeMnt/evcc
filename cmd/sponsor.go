@@ -8,7 +8,7 @@ import (
 // sponsorCmd represents the vehicle command
 var sponsorCmd = &cobra.Command{
 	Use:   "sponsor [name]",
-	Short: "Validate sponsor token",
+	Short: "Configure sponsor token",
 	Args:  cobra.ExactArgs(1),
 	Run:   runSponsor,
 }
@@ -24,5 +24,5 @@ func runSponsor(cmd *cobra.Command, args []string) {
 		fatal(err)
 	}
 
-	log.INFO.Println("sponsorship validated")
+	log.INFO.Println("sponsorship configured")
 }

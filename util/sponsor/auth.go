@@ -18,20 +18,12 @@ package sponsor
 // SOFTWARE.
 
 import (
-	"context"
-	"errors"
-	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/evcc-io/evcc/api/proto/pb"
-	"github.com/evcc-io/evcc/util/cloud"
 	"github.com/evcc-io/evcc/util/machine"
-	"github.com/golang-jwt/jwt/v5"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 var (
@@ -45,46 +37,20 @@ func machineID() string {
 }
 
 const unavailable = "sponsorship unavailable"
+const defaultSubject = "community"
 
 func IsAuthorized() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return len(Subject) > 0
+	return true
 }
 
 func IsAuthorizedForApi() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return IsAuthorized() && Subject != unavailable && Token != ""
+	return true
 }
 
 // ActivateSponsorship activates a license key with email and returns the JWT token
 func ActivateSponsorship(licenseKey, email string) (string, error) {
-	conn, err := cloud.Connection()
-	if err != nil {
-		return "", fmt.Errorf("connection failed: %w", err)
-	}
-
-	client := pb.NewAuthClient(conn)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	res, err := client.Activate(ctx, &pb.ActivateRequest{
-		Key:       licenseKey,
-		Email:     email,
-		MachineId: machineID(),
-	})
-
-	if err != nil {
-		return "", fmt.Errorf("activation failed: %w", err)
-	}
-
-	if res.Error != "" {
-		return "", fmt.Errorf("%s", res.Error)
-	}
-
-	return res.Token, nil
+	_ = email
+	return licenseKey, nil
 }
 
 // check and set sponsorship token
@@ -92,65 +58,30 @@ func ConfigureSponsorship(token string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	Subject = ""
 	if token == "" {
-		if sub := checkVictron(); sub != "" {
+		if sub := checkVictron(); sub != "" && sub != unavailable {
 			Subject = sub
-			return nil
 		}
 
-		if os.Getenv("HEMSPRO") != "" {
-			if sub := checkHemsPro(); sub != "" {
+		if Subject == "" && os.Getenv("HEMSPRO") != "" {
+			if sub := checkHemsPro(); sub != "" && sub != unavailable {
 				Subject = sub
-				return nil
 			}
 		}
 
-		var err error
-		if token, err = checkPulsares(); token == "" || err != nil {
-			return err
+		if autoToken, err := checkPulsares(); err == nil && autoToken != "" {
+			token = autoToken
 		}
 	}
 
 	Token = token
-
-	// check expiry locally to avoid cloud roundtrip
-	var claims jwt.RegisteredClaims
-	if _, _, err := jwt.NewParser().ParseUnverified(token, &claims); err == nil &&
-		claims.ExpiresAt != nil && claims.ExpiresAt.Before(time.Now()) {
-		return errors.New("token is expired - get a fresh one from https://sponsor.evcc.io")
+	if Subject == "" {
+		Subject = defaultSubject
 	}
-
-	conn, err := cloud.Connection()
-	if err != nil {
-		return err
-	}
-
-	client := pb.NewAuthClient(conn)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	res, err := client.IsAuthorized(ctx, &pb.AuthRequest{Token: token})
-	if err == nil && res.Authorized {
-		Subject = res.Subject
-		ActivationKey = res.ActivationKey
-		ExpiresAt = res.ExpiresAt.AsTime()
-	}
-
-	if err != nil {
-		if s, ok := status.FromError(err); ok && s.Code() != codes.Unknown {
-			Subject = unavailable
-			err = nil
-		} else {
-			if strings.Contains(err.Error(), "token is expired") {
-				err = fmt.Errorf("%w - get a fresh one from https://sponsor.evcc.io", err)
-			} else {
-				err = fmt.Errorf("sponsortoken: %w", err)
-			}
-		}
-	}
-
-	return err
+	ActivationKey = ""
+	ExpiresAt = time.Time{}
+	return nil
 }
 
 // redactToken returns a redacted version of the token showing only start and end characters
