@@ -50,7 +50,12 @@ func updateSponsortokenHandler(pub publisher) func(w http.ResponseWriter, r *htt
 
 		token := req.Token
 		if req.Email != "" {
-			token, _ = sponsor.ActivateSponsorship(req.Token, req.Email)
+			var err error
+			token, err = sponsor.ActivateSponsorship(req.Token, req.Email)
+			if err != nil {
+				jsonError(w, http.StatusBadRequest, err)
+				return
+			}
 		}
 
 		if err := sponsor.ConfigureSponsorship(token); err != nil {

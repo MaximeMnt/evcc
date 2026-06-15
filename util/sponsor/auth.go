@@ -48,7 +48,8 @@ func IsAuthorizedForApi() bool {
 }
 
 // ActivateSponsorship activates a license key with email and returns the JWT token
-func ActivateSponsorship(licenseKey, _ string) (string, error) {
+func ActivateSponsorship(licenseKey, email string) (string, error) {
+	_ = email
 	return licenseKey, nil
 }
 
