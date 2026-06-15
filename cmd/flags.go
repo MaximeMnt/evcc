@@ -40,7 +40,7 @@ const (
 	flagPhasesDescription = "Set usable phases (1 or 3)"
 
 	flagCloud            = "cloud"
-	flagCloudDescription = "Use cloud service (requires sponsor token)"
+	flagCloudDescription = "Use cloud service"
 
 	flagReset            = "reset"
 	flagResetDescription = "Reset migrated settings"

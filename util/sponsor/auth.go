@@ -18,6 +18,7 @@ package sponsor
 // SOFTWARE.
 
 import (
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -56,8 +57,27 @@ func ConfigureSponsorship(token string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
+	Subject = ""
+	if token == "" {
+		if sub := checkVictron(); sub != "" && sub != unavailable {
+			Subject = sub
+		}
+
+		if Subject == "" && os.Getenv("HEMSPRO") != "" {
+			if sub := checkHemsPro(); sub != "" && sub != unavailable {
+				Subject = sub
+			}
+		}
+
+		if autoToken, err := checkPulsares(); err == nil && autoToken != "" {
+			token = autoToken
+		}
+	}
+
 	Token = token
-	Subject = defaultSubject
+	if Subject == "" {
+		Subject = defaultSubject
+	}
 	ActivationKey = ""
 	ExpiresAt = time.Time{}
 	return nil
