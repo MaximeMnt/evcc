@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  evcc:
+    image: maximemnt/evcc:latest
+    container_name: evcc
+    restart: unless-stopped
+    ports:
+      # UI and API
+      - "7070:7070"
+      # mDNS
+      - "5353:5353/udp"
+      # EEBus
+      - "4712:4712"
+      # KEBA charger
+      - "7090:7090/udp"
+      # EVSE Master charger
+      - "28376:28376/udp"
+      # OCPP charger
+      - "8887:8887"
+      # Modbus UDP
+      - "8899:8899/udp"
+      # SMA Energy Manager
+      - "9522:9522/udp"
+
+    environment:
+      - TZ=Europe/Brussels
+
+    volumes:
+      # Configuration and data persistence
+      - evcc-data:/app/data
+      - evcc-config:/app/config
+
+    networks:
+      - evcc-network
+
+    healthcheck:
+      test: ["CMD", "wget", "-qO", "/dev/null", "http://localhost:7070"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  evcc-data:
+    driver: local
+  evcc-config:
+    driver: local
+
+networks:
+  evcc-network:
+    driver: bridge
