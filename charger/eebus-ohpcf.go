@@ -63,7 +63,8 @@ func NewEEBusOHPCFFromConfig(ctx context.Context, other map[string]any) (api.Cha
 		Reboost time.Duration
 	}{
 		embed: embed{
-			Features_: []api.Feature{api.Heating, api.IntegratedDevice},
+			Icon_:     "heatpump",
+			Features_: []api.Feature{api.Continuous, api.Heating, api.IntegratedDevice, api.SwitchDevice},
 		},
 		Reboost: 10 * time.Minute,
 	}
@@ -369,7 +370,9 @@ func (c *EEBusOHPCF) Dimmed() (bool, error) {
 		return false, err
 	}
 
-	return limit.IsActive && limit.Value > 0, nil
+	// an active limit means dimmed; the applied §14a limit value is 0W, so a
+	// value-based check would never report the dimmed state and never release it
+	return limit.IsActive, nil
 }
 
 // Dim implements the api.Dimmer interface. It writes a §14a/LPC consumption
@@ -423,24 +426,22 @@ func (c *EEBusOHPCF) apply() error {
 var _ api.PowerLimiter = (*EEBusOHPCF)(nil)
 
 // GetMinMaxPower implements the api.PowerLimiter interface, reporting the
-// announced optional consumption (estimate..max) or ErrNotAvailable if none.
+// optional consumption as expected min/max or ErrNotAvailable if none.
 func (c *EEBusOHPCF) GetMinMaxPower() (float64, float64, error) {
 	entity, ok := c.connectedCompressor()
 	if !ok {
 		return 0, 0, errNotConnected
 	}
 
-	estimate, err := c.cem.OHPCF.RequestedPowerEstimate(entity)
-	if err != nil {
-		return 0, 0, api.ErrNotAvailable
+	if power, _ := c.cem.OHPCF.RequestedPowerEstimate(entity); power > 0 {
+		return power, power, nil
 	}
 
-	maxPower, err := c.cem.OHPCF.RequestedPowerMax(entity)
-	if err != nil {
-		maxPower = estimate
+	if power, _ := c.cem.OHPCF.RequestedPowerMax(entity); power > 0 {
+		return power, power, nil
 	}
 
-	return estimate, maxPower, nil
+	return 0, 0, api.ErrNotAvailable
 }
 
 var _ api.Meter = (*EEBusOHPCF)(nil)
