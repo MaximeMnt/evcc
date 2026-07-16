@@ -19,7 +19,6 @@ package sponsor
 
 import (
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -27,9 +26,9 @@ import (
 )
 
 var (
-	mu                            sync.RWMutex
-	Subject, Token, ActivationKey string
-	ExpiresAt                     time.Time
+	mu             sync.RWMutex
+	Subject, Token string
+	ExpiresAt      time.Time
 )
 
 func machineID() string {
@@ -45,12 +44,6 @@ func IsAuthorized() bool {
 
 func IsAuthorizedForApi() bool {
 	return true
-}
-
-// ActivateSponsorship activates a license key with email and returns the JWT token
-func ActivateSponsorship(licenseKey, email string) (string, error) {
-	_ = email
-	return licenseKey, nil
 }
 
 // check and set sponsorship token
@@ -79,7 +72,6 @@ func ConfigureSponsorship(token string) error {
 	if Subject == "" {
 		Subject = defaultSubject
 	}
-	ActivationKey = ""
 	ExpiresAt = time.Time{}
 	return nil
 }
@@ -92,20 +84,11 @@ func redactToken(token string) string {
 	return token[:6] + "......." + token[len(token)-6:]
 }
 
-// redactKey returns a redacted version of the activation key showing only the first segment
-func redactKey(key string) string {
-	if idx := strings.Index(key, "-"); idx > 0 {
-		return key[:idx] + "-XXXXX-XXXXX-XXXXX-XXXXX"
-	}
-	return ""
-}
-
 type Status struct {
-	Name          string    `json:"name"`
-	ExpiresAt     time.Time `json:"expiresAt,omitempty"`
-	ExpiresSoon   bool      `json:"expiresSoon,omitempty"`
-	Token         string    `json:"token,omitempty"`
-	ActivationKey string    `json:"activationKey,omitempty"`
+	Name        string    `json:"name"`
+	ExpiresAt   time.Time `json:"expiresAt,omitempty"`
+	ExpiresSoon bool      `json:"expiresSoon,omitempty"`
+	Token       string    `json:"token,omitempty"`
 }
 
 // RedactedStatus returns the sponsorship status
@@ -119,10 +102,9 @@ func RedactedStatus() Status {
 	}
 
 	return Status{
-		Name:          Subject,
-		ExpiresAt:     ExpiresAt,
-		ExpiresSoon:   expiresSoon,
-		Token:         redactToken(Token),
-		ActivationKey: redactKey(ActivationKey),
+		Name:        Subject,
+		ExpiresAt:   ExpiresAt,
+		ExpiresSoon: expiresSoon,
+		Token:       redactToken(Token),
 	}
 }
