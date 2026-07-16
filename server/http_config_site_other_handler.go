@@ -40,7 +40,6 @@ func updateSponsortokenHandler(pub publisher) func(w http.ResponseWriter, r *htt
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			Token string `json:"token"`
-			Email string `json:"email"`
 		}
 
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -49,14 +48,6 @@ func updateSponsortokenHandler(pub publisher) func(w http.ResponseWriter, r *htt
 		}
 
 		token := req.Token
-		if req.Email != "" {
-			var err error
-			token, err = sponsor.ActivateSponsorship(req.Token, req.Email)
-			if err != nil {
-				jsonError(w, http.StatusBadRequest, err)
-				return
-			}
-		}
 
 		if err := sponsor.ConfigureSponsorship(token); err != nil {
 			jsonError(w, http.StatusBadRequest, err)
