@@ -1,0 +1,129 @@
+name: Fork Sync
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  sync:
+    name: Sync with upstream
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve fork and upstream branches
+        id: repo
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          parent_repo=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.parent.full_name // empty')
+          if [ -z "$parent_repo" ]; then
+            echo "This repository is not a fork. Nothing to sync."
+            echo "is_fork=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          upstream_branch=$(gh api "repos/${parent_repo}" --jq '.default_branch')
+          fork_branch=$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')
+
+          echo "is_fork=true" >> "$GITHUB_OUTPUT"
+          echo "parent_repo=${parent_repo}" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=${upstream_branch}" >> "$GITHUB_OUTPUT"
+          echo "fork_branch=${fork_branch}" >> "$GITHUB_OUTPUT"
+
+      - name: Configure git user
+        if: steps.repo.outputs.is_fork == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Merge upstream into fork default branch
+        if: steps.repo.outputs.is_fork == 'true'
+        id: merge
+        env:
+          PARENT_REPO: ${{ steps.repo.outputs.parent_repo }}
+          UPSTREAM_BRANCH: ${{ steps.repo.outputs.upstream_branch }}
+          FORK_BRANCH: ${{ steps.repo.outputs.fork_branch }}
+        run: |
+          set -euo pipefail
+
+          git remote add upstream "https://github.com/${PARENT_REPO}.git"
+          git fetch upstream "${UPSTREAM_BRANCH}"
+          git checkout "${FORK_BRANCH}"
+          git pull --ff-only origin "${FORK_BRANCH}"
+
+          if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            git push origin "HEAD:${FORK_BRANCH}"
+            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          conflict_files="$(git diff --name-only --diff-filter=U)"
+          {
+            echo "conflict=true"
+            echo "conflict_files<<EOF"
+            echo "${conflict_files}"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          git merge --abort
+
+      - name: Open or update conflict issue for agent handling
+        if: steps.merge.outputs.conflict == 'true' && vars.FORK_SYNC_AGENT_ASSIGNEE != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_BRANCH: ${{ steps.repo.outputs.fork_branch }}
+          UPSTREAM_BRANCH: ${{ steps.repo.outputs.upstream_branch }}
+          PARENT_REPO: ${{ steps.repo.outputs.parent_repo }}
+          ASSIGNEE: ${{ vars.FORK_SYNC_AGENT_ASSIGNEE }}
+          CONFLICT_FILES: ${{ steps.merge.outputs.conflict_files }}
+        run: |
+          set -euo pipefail
+
+          title="Fork sync conflict on ${FORK_BRANCH}"
+          body=$(cat <<EOF
+          Automated fork sync detected merge conflicts.
+
+          - Fork: \`${GITHUB_REPOSITORY}\`
+          - Upstream: \`${PARENT_REPO}\`
+          - Upstream branch: \`${UPSTREAM_BRANCH}\`
+          - Fork branch: \`${FORK_BRANCH}\`
+          - Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+
+          Conflict files:
+
+          \`\`\`
+          ${CONFLICT_FILES}
+          \`\`\`
+          EOF
+          )
+
+          existing_issue=$(gh issue list --state open --search "in:title ${title}" --json number --jq '.[0].number // empty')
+          if [ -n "${existing_issue}" ]; then
+            gh issue comment "${existing_issue}" --body "${body}"
+            gh issue edit "${existing_issue}" --add-assignee "${ASSIGNEE}" >/dev/null
+            exit 0
+          fi
+
+          gh issue create \
+            --title "${title}" \
+            --body "${body}" \
+            --assignee "${ASSIGNEE}" >/dev/null
+
+      - name: Fail on merge conflict
+        if: steps.merge.outputs.conflict == 'true'
+        run: |
+          echo "Upstream sync failed due to merge conflicts."
+          echo "Conflicting files:"
+          echo "${{ steps.merge.outputs.conflict_files }}"
+          exit 1
