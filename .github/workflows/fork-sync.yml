@@ -63,7 +63,7 @@ jobs:
           git checkout --force -B "${FORK_BRANCH}" "origin/${FORK_BRANCH}"
 
           if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
-            workflow_files="$(git diff --name-only HEAD^1..HEAD -- '.github/workflows/*')"
+            workflow_files="$(git diff --name-only HEAD^1..HEAD -- '.github/workflows/')"
             if [ -n "${workflow_files}" ] && [ -z "${PUSH_TOKEN}" ]; then
               {
                 echo "conflict=false"
@@ -152,7 +152,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          title="Fork sync needs workflow write token on ${FORK_BRANCH}"
+          title="Fork sync needs push token with workflow permission on ${FORK_BRANCH}"
           body=$(cat <<EOF
           Automated fork sync merged upstream changes that modify workflow files, but the default \`github.token\` cannot push those updates.
 
