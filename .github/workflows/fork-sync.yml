@@ -60,7 +60,7 @@ jobs:
 
           git remote add upstream "https://github.com/${PARENT_REPO}.git"
           git fetch upstream "${UPSTREAM_BRANCH}"
-          git checkout "${FORK_BRANCH}"
+          git checkout --force -B "${FORK_BRANCH}" "origin/${FORK_BRANCH}"
           git pull --ff-only origin "${FORK_BRANCH}"
 
           if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
