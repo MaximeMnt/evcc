@@ -8,7 +8,6 @@ on:
 permissions:
   contents: write
   issues: write
-  workflows: write
 
 jobs:
   sync:
@@ -55,6 +54,7 @@ jobs:
           PARENT_REPO: ${{ steps.repo.outputs.parent_repo }}
           UPSTREAM_BRANCH: ${{ steps.repo.outputs.upstream_branch }}
           FORK_BRANCH: ${{ steps.repo.outputs.fork_branch }}
+          PUSH_TOKEN: ${{ secrets.FORK_SYNC_PUSH_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -64,14 +64,34 @@ jobs:
           git pull --ff-only origin "${FORK_BRANCH}"
 
           if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
+            workflow_files="$(git diff --name-only HEAD^1..HEAD -- '.github/workflows/*')"
+            if [ -n "${workflow_files}" ] && [ -z "${PUSH_TOKEN}" ]; then
+              {
+                echo "conflict=false"
+                echo "workflow_permission_required=true"
+                echo "workflow_files<<EOF"
+                echo "${workflow_files}"
+                echo "EOF"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+
+            if [ -n "${PUSH_TOKEN}" ]; then
+              git remote set-url origin "https://x-access-token:${PUSH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            fi
+
             git push origin "HEAD:${FORK_BRANCH}"
-            echo "conflict=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "conflict=false"
+              echo "workflow_permission_required=false"
+            } >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           conflict_files="$(git diff --name-only --diff-filter=U)"
           {
             echo "conflict=true"
+            echo "workflow_permission_required=false"
             echo "conflict_files<<EOF"
             echo "${conflict_files}"
             echo "EOF"
@@ -121,10 +141,62 @@ jobs:
             --body "${body}" \
             --assignee "${ASSIGNEE}" >/dev/null
 
+      - name: Open or update token-permission issue for agent handling
+        if: steps.merge.outputs.workflow_permission_required == 'true' && vars.FORK_SYNC_AGENT_ASSIGNEE != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORK_BRANCH: ${{ steps.repo.outputs.fork_branch }}
+          UPSTREAM_BRANCH: ${{ steps.repo.outputs.upstream_branch }}
+          PARENT_REPO: ${{ steps.repo.outputs.parent_repo }}
+          ASSIGNEE: ${{ vars.FORK_SYNC_AGENT_ASSIGNEE }}
+          WORKFLOW_FILES: ${{ steps.merge.outputs.workflow_files }}
+        run: |
+          set -euo pipefail
+
+          title="Fork sync needs workflow write token on ${FORK_BRANCH}"
+          body=$(cat <<EOF
+          Automated fork sync merged upstream changes that modify workflow files, but the default \`github.token\` cannot push those updates.
+
+          - Fork: \`${GITHUB_REPOSITORY}\`
+          - Upstream: \`${PARENT_REPO}\`
+          - Upstream branch: \`${UPSTREAM_BRANCH}\`
+          - Fork branch: \`${FORK_BRANCH}\`
+          - Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          - Required secret: \`FORK_SYNC_PUSH_TOKEN\` (PAT or GitHub App token with workflow write permission)
+
+          Workflow files in this sync:
+
+          \`\`\`
+          ${WORKFLOW_FILES}
+          \`\`\`
+          EOF
+          )
+
+          existing_issue=$(gh issue list --state open --search "in:title ${title}" --json number --jq '.[0].number // empty')
+          if [ -n "${existing_issue}" ]; then
+            gh issue comment "${existing_issue}" --body "${body}"
+            gh issue edit "${existing_issue}" --add-assignee "${ASSIGNEE}" >/dev/null
+            exit 0
+          fi
+
+          gh issue create \
+            --title "${title}" \
+            --body "${body}" \
+            --assignee "${ASSIGNEE}" >/dev/null
+
       - name: Fail on merge conflict
         if: steps.merge.outputs.conflict == 'true'
         run: |
           echo "Upstream sync failed due to merge conflicts."
           echo "Conflicting files:"
           echo "${{ steps.merge.outputs.conflict_files }}"
+          exit 1
+
+      - name: Fail when workflow token is required
+        if: steps.merge.outputs.workflow_permission_required == 'true'
+        run: |
+          echo "Upstream sync includes workflow file changes."
+          echo "Set secret FORK_SYNC_PUSH_TOKEN with workflow write permission."
+          echo "Workflow files:"
+          echo "${{ steps.merge.outputs.workflow_files }}"
           exit 1
