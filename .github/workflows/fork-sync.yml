@@ -63,7 +63,7 @@ jobs:
           git checkout --force -B "${FORK_BRANCH}" "origin/${FORK_BRANCH}"
 
           if git merge --no-edit "upstream/${UPSTREAM_BRANCH}"; then
-            workflow_files="$(git diff --name-only HEAD^1..HEAD -- '.github/workflows/**')"
+            workflow_files="$(git diff --name-only HEAD^1..HEAD -- '.github/workflows/')"
             if [ -n "${workflow_files}" ] && [ -z "${PUSH_TOKEN}" ]; then
               {
                 echo "conflict=false"
@@ -161,7 +161,7 @@ jobs:
           - Upstream branch: \`${UPSTREAM_BRANCH}\`
           - Fork branch: \`${FORK_BRANCH}\`
           - Workflow run: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
-          - Required secret: \`FORK_SYNC_PUSH_TOKEN\` (PAT or GitHub App token with workflow write permission)
+          - Required secret: \`FORK_SYNC_PUSH_TOKEN\` (PAT or GitHub App token with \`contents: write\` and \`workflows: write\` permission)
 
           Workflow files in this sync:
 
@@ -195,7 +195,7 @@ jobs:
         if: steps.merge.outputs.workflow_permission_required == 'true'
         run: |
           echo "Upstream sync includes workflow file changes."
-          echo "Set secret FORK_SYNC_PUSH_TOKEN with workflow write permission."
+          echo "Set secret FORK_SYNC_PUSH_TOKEN with contents: write and workflows: write permission."
           echo "Workflow files:"
           echo "${{ steps.merge.outputs.workflow_files }}"
           exit 1
