@@ -573,6 +573,9 @@ func (lp *Loadpoint) evVehicleConnectHandler() {
 
 	// reset energy-based charging plan offset
 	lp.planEnergyOffset = 0
+
+	// connect adds the loadpoint's demand
+	lp.triggerOptimizer()
 }
 
 // evVehicleDisconnectHandler sends external start event
@@ -628,12 +631,24 @@ func (lp *Loadpoint) evVehicleDisconnectHandler() {
 	}
 
 	// reset session
-	lp.SetLimitSoc(0)
-	lp.SetLimitEnergy(0)
+	if !lp.chargerHasFeature(api.IntegratedDevice) {
+		lp.SetLimitSoc(0)
+		lp.SetLimitEnergy(0)
+	}
 
 	// mark plan slot as inactive
 	// this will force a deletion of an outdated plan once plan time is expired in GetPlan()
 	lp.setPlanActive(false)
+
+	// disconnect removes the loadpoint's demand
+	lp.triggerOptimizer()
+}
+
+// triggerOptimizer re-runs the optimizer when the loadpoint's profile changed
+func (lp *Loadpoint) triggerOptimizer() {
+	if lp.site != nil {
+		lp.site.Optimize()
+	}
 }
 
 // evVehicleSocProgressHandler sends external start event
@@ -1046,15 +1061,20 @@ func (lp *Loadpoint) charging() bool {
 func (lp *Loadpoint) PvChargeStarting() bool {
 	lp.RLock()
 	enabled := lp.enabled
-	pvTimerRunning := !lp.pvTimer.IsZero()
+	pvTimer := lp.pvTimer
 	lp.RUnlock()
 
 	if lp.GetMode() != api.ModePV || !lp.connected() || lp.chargeGoalReached(enabled) {
 		return false
 	}
 
-	// enable timer running (not yet enabled)
-	return !enabled && pvTimerRunning
+	if enabled || pvTimer.IsZero() {
+		return false
+	}
+
+	// a timer restarting on every surplus dip never starts the loadpoint, hence
+	// only claim surplus once it has survived half of the enable delay (#32778)
+	return lp.clock.Since(pvTimer) >= lp.GetEnableDelay()/2
 }
 
 // chargeGoalReached reports whether the loadpoint will not draw more: enabled
@@ -1558,7 +1578,7 @@ func (lp *Loadpoint) publishTimer(name string, delay time.Duration, action strin
 }
 
 // boostPower returns the additional power that the loadpoint should draw from the battery
-func (lp *Loadpoint) boostPower(batteryBoostPower float64) float64 {
+func (lp *Loadpoint) boostPower(batteryPower float64) float64 {
 	boost := lp.GetBatteryBoost()
 	if boost == boostDisabled || boost == boostHold {
 		return 0
@@ -1573,6 +1593,16 @@ func (lp *Loadpoint) boostPower(batteryBoostPower float64) float64 {
 		// in a too low current when there is a bit remaining grid consumption due to the accuracy
 		// of the battery controller
 		delta += lp.EffectiveStepPower()
+	}
+
+	// bridge the power gap between 1p max and 3p min so pvScalePhases can trigger a scale-up
+	if lp.hasPhaseSwitching() && lp.phaseSwitchCompleted() && lp.site.GetBatteryMaxDischargePower() != nil {
+		if activePhases, maxPhases := lp.ActivePhases(), lp.MaxActivePhases(); activePhases < maxPhases &&
+			lp.circuitAllowsPhases(maxPhases, lp.effectiveMinCurrent()) {
+			// max power actually achievable on the active phases
+			activeMaxPower := min(lp.EffectiveMaxPower(), Voltage*lp.effectiveMaxCurrent()*float64(activePhases))
+			delta += max(0, lp.EffectiveMinPower()*float64(maxPhases)-activeMaxPower)
+		}
 	}
 
 	// start boosting by setting maximum power
@@ -1590,20 +1620,25 @@ func (lp *Loadpoint) boostPower(batteryBoostPower float64) float64 {
 		}
 	}
 
-	res := batteryBoostPower + delta + lp.site.GetResidualPower()
-	lp.log.DEBUG.Printf("pv charge battery boost: %.0fW = -%.0fW battery - %.0fW boost", -res, batteryBoostPower, delta)
+	if maxDischargePower := lp.site.GetBatteryMaxDischargePower(); maxDischargePower != nil {
+		// limit delta to what the battery can still provide
+		delta = min(delta, max(0, *maxDischargePower-batteryPower))
+	}
+
+	res := max(0, batteryPower) + delta + lp.site.GetResidualPower()
+	lp.log.DEBUG.Printf("pv charge battery boost: %.0fW = -%.0fW battery - %.0fW boost - %.0fW residual", -res, max(0, batteryPower), delta, lp.site.GetResidualPower())
 
 	return res
 }
 
 // pvMaxCurrent calculates the maximum target current for PV mode
-func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryBoostPower float64, batteryBuffered, batteryStart bool) float64 {
+func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryPower float64, batteryBuffered, batteryStart bool) float64 {
 	// read only once to simplify testing
 	minCurrent := lp.effectiveMinCurrent()
 	maxCurrent := lp.effectiveMaxCurrent()
 
 	// push demand to drain battery
-	sitePower -= lp.boostPower(batteryBoostPower)
+	sitePower -= lp.boostPower(batteryPower)
 
 	// switch phases up/down
 	var scaledTo int
@@ -1626,7 +1661,7 @@ func (lp *Loadpoint) pvMaxCurrent(mode api.ChargeMode, sitePower, batteryBoostPo
 	targetCurrent := max(effectiveCurrent+deltaCurrent, 0)
 
 	// in MinPV mode or under special conditions return at least minCurrent
-	if battery := batteryStart || batteryBuffered && lp.charging(); (mode == api.ModeMinPV || battery) && targetCurrent < minCurrent {
+	if battery := batteryStart || batteryBuffered && lp.charging() || lp.GetBatteryBoost() == boostContinue; (mode == api.ModeMinPV || battery) && targetCurrent < minCurrent {
 		lp.log.DEBUG.Printf("pv charge current: min %.3gA > %.3gA (%.0fW @ %dp, battery: %t)", minCurrent, targetCurrent, sitePower, activePhases, battery)
 		return minCurrent
 	}
@@ -2085,7 +2120,7 @@ func (lp *Loadpoint) phaseSwitchCompleted() bool {
 }
 
 // Update is the main control function. It reevaluates meters and charger state
-func (lp *Loadpoint) Update(sitePower, batteryBoostPower float64, consumption, feedin api.Rates, batteryBuffered, batteryStart bool, greenShare float64, effPrice, effCo2 *float64, dim *bool) {
+func (lp *Loadpoint) Update(sitePower, batteryPower float64, consumption, feedin api.Rates, batteryBuffered, batteryStart bool, greenShare float64, effPrice, effCo2 *float64, dim *bool) {
 	// hold battery boost when SOC drops below the limit: stop draining the battery, but
 	// keep the vehicle prioritised over recharging it (via sitePower priorityAdjustment)
 	// until the vehicle disconnects. This holds the battery at the configured level
@@ -2275,7 +2310,7 @@ func (lp *Loadpoint) Update(sitePower, batteryBoostPower float64, consumption, f
 			break
 		}
 
-		targetCurrent := lp.pvMaxCurrent(mode, sitePower, batteryBoostPower, batteryBuffered, batteryStart)
+		targetCurrent := lp.pvMaxCurrent(mode, sitePower, batteryPower, batteryBuffered, batteryStart)
 
 		if targetCurrent == 0 && lp.vehicleClimateActive() {
 			targetCurrent = lp.effectiveMinCurrent()

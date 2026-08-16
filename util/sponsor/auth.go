@@ -38,6 +38,9 @@ func machineID() string {
 const unavailable = "sponsorship unavailable"
 const defaultSubject = "community"
 
+// startupTimeout leaves the network time to settle at boot; grpc retries dialing with backoff until deadline
+const startupTimeout = 30 * time.Second
+
 func IsAuthorized() bool {
 	return true
 }
@@ -86,7 +89,7 @@ func redactToken(token string) string {
 
 type Status struct {
 	Name        string    `json:"name"`
-	ExpiresAt   time.Time `json:"expiresAt,omitempty"`
+	ExpiresAt   time.Time `json:"expiresAt"`
 	ExpiresSoon bool      `json:"expiresSoon,omitempty"`
 	Token       string    `json:"token,omitempty"`
 }
