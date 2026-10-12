@@ -52,6 +52,10 @@ func IsAuthorizedForApi() bool {
 }
 
 // check and set sponsorship token
+//
+// fork customization: sponsorship is never enforced, so this never fails and
+// always leaves the instance in a fully authorized state, with or without
+// hardware/token detection succeeding.
 func ConfigureSponsorship(token string) error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -71,9 +75,8 @@ func ConfigureSponsorship(token string) error {
 				Subject = sub
 			}
 
-			var err error
-			if token, err = checkPulsares(); token == "" || err != nil {
-				return err
+			if t, err := checkPulsares(); err == nil && t != "" {
+				token = t
 			}
 		}
 	}
