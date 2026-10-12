@@ -116,6 +116,7 @@ export default defineComponent({
 		vehicle: Object as PropType<Vehicle>,
 		vehicleLimitSoc: Number,
 		planOverrun: Number,
+		planPeakConflict: Boolean,
 		forecast: Object as PropType<UiForecast>,
 	},
 	emits: [

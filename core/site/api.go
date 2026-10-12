@@ -86,6 +86,14 @@ type API interface {
 	SetResidualPower(float64) error
 	GetGridExportLimit() float64
 	SetGridExportLimit(float64) error
+	// GetPeakFollowing returns if charging follows the month's grid import peak
+	GetPeakFollowing() bool
+	// SetPeakFollowing enables or disables peak following
+	SetPeakFollowing(bool) error
+	// GetPeakLimit returns the grid import peak limit in W
+	GetPeakLimit() float64
+	// SetPeakLimit sets the grid import peak limit in W
+	SetPeakLimit(float64) error
 	GetProfilePercentile() *float64
 	SetProfilePercentile(*float64) error
 

@@ -57,6 +57,7 @@ const baseState = {
   planActive: false,
   planEnergy: 0,
   planOverrun: 0,
+  planPeakConflict: false,
   planStrategy: { continuous: false, precondition: 0 },
   planProjectedEnd: undefined,
   planProjectedStart: undefined,

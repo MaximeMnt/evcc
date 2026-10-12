@@ -1138,8 +1138,12 @@ export default defineComponent({
 			if (exportLimit > 0) {
 				result["exportLimit"] = { value: exportLimit };
 			}
+			const peakLimit = store.state?.peakFollowing ? store.state?.peakLimit || 0 : 0;
+			if (peakLimit > 0) {
+				result["peakLimit"] = { value: peakLimit, warning: !!store.state?.peak?.exceeded };
+			}
 			if (this.hemsDevices.length === 0 && !this.hems?.config?.configured) {
-				return exportLimit > 0 ? result : { configured: { value: false } };
+				return Object.keys(result).length > 0 ? result : { configured: { value: false } };
 			}
 			const status = store.state?.hems?.status;
 			if (!status) {

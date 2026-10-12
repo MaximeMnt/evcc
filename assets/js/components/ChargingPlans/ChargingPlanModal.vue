@@ -31,6 +31,7 @@
 					:vehicle="vehicle"
 					:vehicleLimitSoc="loadpoint?.vehicleLimitSoc"
 					:planOverrun="loadpoint?.planOverrun"
+					:planPeakConflict="loadpoint?.planPeakConflict"
 					:forecast="forecast"
 					@static-plan-updated="updateStaticPlan"
 					@static-plan-removed="removeStaticPlan"

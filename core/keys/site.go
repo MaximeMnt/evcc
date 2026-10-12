@@ -58,6 +58,11 @@ const (
 	// grid settings
 	GridExportLimit = "gridExportLimit"
 
+	// peak following
+	Peak          = "peak"
+	PeakFollowing = "peakFollowing"
+	PeakLimit     = "peakLimit"
+
 	// forecast settings
 	SolarAdjusted     = "solarAdjusted"
 	ProfilePercentile = "profilePercentile"

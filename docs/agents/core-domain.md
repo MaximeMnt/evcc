@@ -138,6 +138,15 @@ Types: `TariffUsageGrid`, `TariffUsageFeedIn`, `TariffUsageCo2`, `TariffUsagePla
   - `optimalPlan()` — cheapest non-contiguous slots
   - `continuousPlan()` — cheapest continuous window (fallback)
 
+## Demand Peak Following
+
+Opt-in site setting for capacity tariffs (e.g. Belgium: monthly bill on the highest clock-aligned quarter-hour average grid import). `peakFollowing` + `peakLimit` (W) live on the site (`core/site_peak.go`), math in `core/peak`.
+
+- Target is `max(peakLimit, month peak)`: once the month's peak is higher, charging up to it costs nothing extra
+- Month peak comes from persisted grid collector slots (`metrics.Collector.MaxSlotEnergy`), recovered downtime slots excluded. The running quarter hour comes from `SlotEnergy`, extrapolated after a mid-slot start, assumed at target when unknown
+- Runtime: `setLimit` caps charge power at `chargePower + budget` (headroom for the rest of the quarter hour minus current grid power), also considered for 1p/3p decisions
+- Planner: `PlanLimited` derates each slot to `target - household forecast` (zero below min power). If the goal cannot be reached under the limit, the unlimited plan is used, `planPeakConflict` is published and the runtime cap is bypassed so the deadline wins. Min SoC charging also bypasses the cap
+
 ## Key File Locations
 
 - `api/api.go` — all core interfaces
