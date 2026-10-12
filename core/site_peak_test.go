@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/util"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -95,7 +96,7 @@ func TestUpdatePeakInactive(t *testing.T) {
 	site.updatePeakFrom(new(fakeSlotCollector), time.Now(), 0, 0)
 	_, active := site.peakBudget()
 	assert.False(t, active, "following disabled")
-	assert.Nil(t, site.peakPowerLimit())
+	assert.Nil(t, site.peakPowerLimit(nil))
 
 	require.NoError(t, site.SetPeakFollowing(true))
 	site.updatePeakFrom(nil, time.Now(), 0, 0)
@@ -116,7 +117,7 @@ func TestPeakPowerLimit(t *testing.T) {
 		home:      []float64{1e3, 3e3, 500, 6e3},
 	}
 
-	limit := site.peakPowerLimit()
+	limit := site.peakPowerLimit(nil)
 	require.NotNil(t, limit)
 
 	q := func(i int) time.Time { return slot.Add(time.Duration(i) * 15 * time.Minute) }
@@ -126,4 +127,66 @@ func TestPeakPowerLimit(t *testing.T) {
 	assert.Equal(t, 2e3, limit(q(0), q(3)), "window takes the tightest quarter hour")
 	assert.Equal(t, 0.0, limit(q(3), q(4)), "household above target")
 	assert.Equal(t, 3.5e3, limit(q(6), q(7)), "next month only knows the limit, profile repeats")
+}
+
+func TestPeakPowerLimitSolar(t *testing.T) {
+	slot := time.Date(2026, 10, 12, 12, 0, 0, 0, time.Local)
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.peak = peakState{
+		limit:      4e3,
+		active:     true,
+		slot:       slot,
+		home:       []float64{3e3},
+		solarScale: 0.5,
+		solar: api.Rates{
+			{Start: slot, End: slot.Add(time.Hour), Value: 4e3},
+			{Start: slot.Add(time.Hour), End: slot.Add(2 * time.Hour), Value: 4e3},
+		},
+	}
+
+	limit := site.peakPowerLimit(nil)
+	q := func(i int) time.Time { return slot.Add(time.Duration(i) * 15 * time.Minute) }
+
+	assert.InDelta(t, 3e3, limit(q(0), q(1)), 1e-6, "scaled solar offsets household")
+	assert.InDelta(t, 1e3, limit(q(8), q(9)), 1e-6, "no solar beyond forecast")
+
+	site.peak.solarScale = 1
+	assert.InDelta(t, 4e3, site.peakPowerLimit(nil)(q(0), q(1)), 1e-6, "export does not raise the limit")
+}
+
+func TestPeakReservations(t *testing.T) {
+	slot := time.Date(2026, 10, 12, 22, 0, 0, 0, time.Local)
+
+	site := &Site{log: util.NewLogger("foo")}
+	site.peak = peakState{limit: 6e3, active: true, slot: slot, home: []float64{1e3}}
+
+	a, b := new(int), new(int)
+	site.peakReserve(a, api.Rates{
+		{Start: slot, End: slot.Add(15 * time.Minute), Value: 3e3},
+		{Start: slot.Add(15 * time.Minute), End: slot.Add(20 * time.Minute), Value: 3e3},
+	})
+
+	q := func(i int) time.Time { return slot.Add(time.Duration(i) * 15 * time.Minute) }
+
+	limitB := site.peakPowerLimit(b)
+	assert.InDelta(t, 2e3, limitB(q(0), q(1)), 1e-6, "other loadpoint's plan takes headroom")
+	assert.InDelta(t, 4e3, limitB(q(1), q(2)), 1e-6, "partial quarter hour counts by its average")
+	assert.InDelta(t, 5e3, limitB(q(2), q(3)), 1e-6)
+
+	assert.InDelta(t, 5e3, site.peakPowerLimit(a)(q(0), q(1)), 1e-6, "own plan is not counted")
+
+	site.peakReserve(a, nil)
+	assert.InDelta(t, 5e3, site.peakPowerLimit(b)(q(0), q(1)), 1e-6, "released")
+}
+
+func TestOptimizerGridConfigPeak(t *testing.T) {
+	site := &Site{log: util.NewLogger("foo")}
+
+	assert.Zero(t, site.optimizerGridConfig().PMaxImp, "inactive")
+
+	site.peak = peakState{limit: 4e3, monthPeak: 5e3, active: true}
+	res := site.optimizerGridConfig()
+	assert.Equal(t, float32(5e3), res.PMaxImp, "soft limit at the target")
+	assert.Equal(t, float32(peakExcessPrice), res.PrcPExcImp)
 }

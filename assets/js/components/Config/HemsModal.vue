@@ -10,7 +10,7 @@
 		:is-yaml-input-type="isYamlInputType"
 		:on-template-change="handleTemplateChange"
 		:hide-template-fields="fromYaml"
-		:show-main-content="!experimental || activeTab === 'dynamic'"
+		:show-main-content="activeTab === 'dynamic'"
 		:hide-delete="true"
 		:hide-info="true"
 		:keep-open-on-remove="true"
@@ -39,7 +39,7 @@
 					{{ $t("config.general.docsLink") }}
 				</a>
 			</p>
-			<ul v-if="experimental" class="nav nav-tabs mb-4">
+			<ul class="nav nav-tabs mb-4">
 				<li class="nav-item">
 					<a
 						class="nav-link"
@@ -57,7 +57,7 @@
 						href="#"
 						@click.prevent="activeTab = 'static'"
 					>
-						{{ $t("config.hems.staticLimits") }} 🧪
+						{{ $t("config.hems.staticLimits") }}
 					</a>
 				</li>
 			</ul>
@@ -85,8 +85,8 @@
 				{{ $t("config.general.fromYamlHint") }}
 			</p>
 		</template>
-		<template v-if="experimental && activeTab === 'static'" #post-content>
-			<div data-testid="grid-export-limit">
+		<template v-if="activeTab === 'static'" #post-content>
+			<div v-if="experimental" class="mb-4" data-testid="grid-export-limit">
 				<div class="form-check form-switch">
 					<input
 						id="hemsExportLimitEnabled"
@@ -98,7 +98,7 @@
 						@change="toggleExportLimit"
 					/>
 					<label for="hemsExportLimitEnabled" class="form-check-label">
-						{{ $t("config.hems.exportLimit") }}
+						{{ $t("config.hems.exportLimit") }} 🧪
 					</label>
 					<div class="ps-2">
 						<p class="text-muted small mb-2">
@@ -134,7 +134,7 @@
 					</div>
 				</div>
 			</div>
-			<div class="mt-4" data-testid="peak-limit">
+			<div data-testid="peak-limit">
 				<div class="form-check form-switch">
 					<input
 						id="hemsPeakEnabled"

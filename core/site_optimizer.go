@@ -587,26 +587,7 @@ func (site *Site) optimizerRequest(battery []types.Measurement) (optimizer.Optim
 		},
 	}
 
-	if site.circuit != nil {
-		if pMaxImp := site.circuit.GetMaxPower(); pMaxImp > 0 {
-			// hard grid import limit if no price penalty is set by PrcPExcImp
-			req.Grid.PMaxImp = float32(pMaxImp)
-		}
-	}
-
-	// static grid export limit configured in the UI: export is capped at this
-	// power, excess PV is curtailed instead of exported
-	if limit := site.GetGridExportLimit(); limit > 0 {
-		req.Grid.PMaxExp = float32(limit)
-	}
-
-	// soft grid feed-in cap from active HEMS curtailment (e.g. German 70% rule)
-	// wins over the static limit while active
-	if curtailed := hems.Curtailed(site.hems); curtailed != nil && *curtailed {
-		if pMaxExp := site.hems.MaxProductionPower(); pMaxExp != nil {
-			req.Grid.PMaxExp = float32(*pMaxExp)
-		}
-	}
+	req.Grid = site.optimizerGridConfig()
 
 	var batteries []optimizerBattery
 
@@ -1281,6 +1262,41 @@ func solarRatesToEnergy(rr api.Rates) (api.Rates, error) {
 	}
 
 	return res, nil
+}
+
+// optimizerGridConfig returns the grid import and export limits for the optimizer
+func (site *Site) optimizerGridConfig() optimizer.GridConfig {
+	var res optimizer.GridConfig
+
+	if site.circuit != nil {
+		if pMaxImp := site.circuit.GetMaxPower(); pMaxImp > 0 {
+			// hard grid import limit if no price penalty is set by PrcPExcImp
+			res.PMaxImp = float32(pMaxImp)
+		}
+	}
+
+	// demand peak as soft import limit: exceeding it costs, but charge goals still win.
+	// A lower circuit limit stays the hard limit.
+	if target, ok := site.peakTarget(); ok && (res.PMaxImp == 0 || float32(target) < res.PMaxImp) {
+		res.PMaxImp = float32(target)
+		res.PrcPExcImp = peakExcessPrice
+	}
+
+	// static grid export limit configured in the UI: export is capped at this
+	// power, excess PV is curtailed instead of exported
+	if limit := site.GetGridExportLimit(); limit > 0 {
+		res.PMaxExp = float32(limit)
+	}
+
+	// soft grid feed-in cap from active HEMS curtailment (e.g. German 70% rule)
+	// wins over the static limit while active
+	if curtailed := hems.Curtailed(site.hems); curtailed != nil && *curtailed {
+		if pMaxExp := site.hems.MaxProductionPower(); pMaxExp != nil {
+			res.PMaxExp = float32(*pMaxExp)
+		}
+	}
+
+	return res
 }
 
 func currentRates(tariff api.Tariff) api.Rates {

@@ -145,7 +145,8 @@ Opt-in site setting for capacity tariffs (e.g. Belgium: monthly bill on the high
 - Target is `max(peakLimit, month peak)`: once the month's peak is higher, charging up to it costs nothing extra
 - Month peak comes from persisted grid collector slots (`metrics.Collector.MaxSlotEnergy`), recovered downtime slots excluded. The running quarter hour comes from `SlotEnergy`, extrapolated after a mid-slot start, assumed at target when unknown
 - Runtime: `setLimit` caps charge power at `chargePower + budget` (headroom for the rest of the quarter hour minus current grid power), also considered for 1p/3p decisions
-- Planner: `PlanLimited` derates each slot to `target - household forecast` (zero below min power). If the goal cannot be reached under the limit, the unlimited plan is used, `planPeakConflict` is published and the runtime cap is bypassed so the deadline wins. Min SoC charging also bypasses the cap
+- Planner: `PlanLimited` derates each slot to `target - projected import` (zero below min power). Projected import is the household profile less the scaled solar forecast, plus the plans other loadpoints registered via `peakReserve`. If the goal cannot be reached under the limit, the unlimited plan is used, `planPeakConflict` is published and the runtime cap is bypassed so the deadline wins. Min SoC charging also bypasses the cap
+- Optimizer: the target is passed as soft import limit (`PMaxImp` with `PrcPExcImp`, the capacity tariff's cost per W), so charge goals still win. A lower circuit limit stays the hard limit
 
 ## Key File Locations
 

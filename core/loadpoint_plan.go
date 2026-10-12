@@ -174,10 +174,12 @@ func (lp *Loadpoint) plannerActive() (active bool) {
 	var plan api.Rates
 	var planStart, planEnd time.Time
 	var planOverrun time.Duration
+	var optimized bool
 	peakOk := true
 
 	defer func() {
 		lp.planPeakConflict = !peakOk
+		lp.reservePeak(plan, optimized, peakOk)
 		lp.publish(keys.Plan, plan)
 		lp.publish(keys.PlanProjectedStart, planStart)
 		lp.publish(keys.PlanProjectedEnd, planEnd)
@@ -219,7 +221,8 @@ func (lp *Loadpoint) plannerActive() (active bool) {
 
 	strategy := lp.getEffectivePlanStrategy()
 
-	plan, power, optimized, peakOk := lp.effectivePlan(planTime, requiredDuration, strategy)
+	var power float64
+	plan, power, optimized, peakOk = lp.effectivePlan(planTime, requiredDuration, strategy)
 	if plan == nil {
 		lp.log.DEBUG.Println("!! plan: plan nil")
 		return false
