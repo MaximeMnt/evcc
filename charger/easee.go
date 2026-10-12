@@ -763,34 +763,8 @@ func (c *Easee) Phases1p3p(phases int) error {
 		if err != nil {
 			c.dispatcher.CancelOrphan(easee.CIRCUIT_MAX_CURRENT_P1)
 		}
-
-		// Sending DCC:7 to skip charge pause after scaling down to 1p.
-		// The loadpoint's next control interval will send the real target current.
-		if err == nil && phases == 1 {
-			override := 7.0
-			chargerData := easee.ChargerSettings{
-				DynamicChargerCurrent: &override,
-			}
-			chargerURI := fmt.Sprintf("%s/chargers/%s/settings", easee.API, c.charger)
-			noop, sendErr := c.dispatcher.Send(chargerURI, chargerData)
-			if sendErr != nil {
-				c.log.WARN.Printf("phase switch: failed to set charger current override: %v", sendErr)
-			} else if !noop {
-				if waitErr := c.waitForDynamicChargerCurrent(override); waitErr != nil {
-					c.log.WARN.Printf("phase switch: charger current override confirmation timeout: %v", waitErr)
-				}
-			}
-
-			c.mux.Lock()
-			c.current = override
-			c.mux.Unlock()
-		}
 	} else {
-		// charger level
-		if phases == 3 {
-			phases = 2 // mode 2 means auto
-		}
-
+		// charger level: phaseMode 1 and 3 lock the phases, 2 would leave them to the charger
 		// change phaseMode only if necessary
 		if phases != c.phaseMode {
 			data := easee.ChargerSettings{
@@ -825,10 +799,9 @@ func (c *Easee) GetPhases() (int, error) {
 			}
 		}
 	} else {
-		// charger level
-		phases = c.phaseMode
-		if phases == 2 { // map automatic to 3p
-			phases = 3
+		// charger level: automatic (2, left by earlier versions) is unknown so the loadpoint locks the phases
+		if c.phaseMode != 2 {
+			phases = c.phaseMode
 		}
 	}
 	return phases, nil

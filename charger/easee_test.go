@@ -461,11 +461,6 @@ func TestEasee_Phases1p3p_registersExpectedOrphan(t *testing.T) {
 	httpmock.RegisterResponder(http.MethodPost, getURI,
 		httpmock.NewStringResponder(200, ""))
 
-	// Mock POST charger settings (DCC:7 sent on scale-down) — return 202 noop
-	chargerURI := fmt.Sprintf("%s/chargers/%s/settings", easee.API, chargerID)
-	httpmock.RegisterResponder(http.MethodPost, chargerURI,
-		httpmock.NewStringResponder(202, "[]"))
-
 	err = e.Phases1p3p(1)
 	assert.NoError(t, err)
 
@@ -476,51 +471,52 @@ func TestEasee_Phases1p3p_registersExpectedOrphan(t *testing.T) {
 		"expected orphan should be registered before the POST")
 }
 
-func TestEasee_Phases1p3p_scaleDown_resetsDCC(t *testing.T) {
-	const siteID = 12345
-	const circuitID = 67890
+// TestEasee_Phases1p3p_chargerLevel verifies that charger level phase switching locks
+// the requested phases instead of handing 3p to the charger's automatic (#34620)
+func TestEasee_Phases1p3p_chargerLevel(t *testing.T) {
 	const chargerID = "TESTTEST"
 
 	e := newEasee()
 	e.charger = chargerID
-	e.site = siteID
-	e.circuit = circuitID
-	e.current = 6 // simulates a prior MaxCurrent(6) call during 3p charging
+	e.opMode = easee.ModeDisconnected // no pause/resume
 
 	httpmock.ActivateNonDefault(e.Client)
 	defer httpmock.DeactivateAndReset()
 
-	// Mock GET circuit settings
-	getURI := fmt.Sprintf("%s/sites/%d/circuits/%d/settings", easee.API, siteID, circuitID)
-	maxP1, maxP2, maxP3 := 32.0, 32.0, 32.0
-	getResp := easee.CircuitSettings{
-		MaxCircuitCurrentP1: &maxP1,
-		MaxCircuitCurrentP2: &maxP2,
-		MaxCircuitCurrentP3: &maxP3,
+	var sent []int
+	uri := fmt.Sprintf("%s/chargers/%s/settings", easee.API, chargerID)
+	httpmock.RegisterResponder(http.MethodPost, uri, func(req *http.Request) (*http.Response, error) {
+		var data easee.ChargerSettings
+		if err := json.NewDecoder(req.Body).Decode(&data); err != nil {
+			return nil, err
+		}
+		sent = append(sent, *data.PhaseMode)
+		return httpmock.NewStringResponse(200, ""), nil
+	})
+
+	for _, tc := range []struct {
+		phaseMode, phases int
+		sent              []int
+	}{
+		{1, 3, []int{3}},
+		{2, 3, []int{3}}, // automatic from earlier versions
+		{3, 1, []int{1}},
+		{3, 3, nil}, // already locked
+	} {
+		sent = nil
+		e.phaseMode = tc.phaseMode
+
+		require.NoError(t, e.Phases1p3p(tc.phases))
+		assert.Equal(t, tc.sent, sent, "phaseMode %d to %dp", tc.phaseMode, tc.phases)
 	}
-	body, err := json.Marshal(getResp)
-	require.NoError(t, err)
-	httpmock.RegisterResponder(http.MethodGet, getURI,
-		httpmock.NewBytesResponder(200, body))
 
-	// Mock POST circuit settings — return 200 (sync)
-	httpmock.RegisterResponder(http.MethodPost, getURI,
-		httpmock.NewStringResponder(200, ""))
-
-	// Mock POST charger settings — return 202 with empty ticks (noop path)
-	chargerURI := fmt.Sprintf("%s/chargers/%s/settings", easee.API, chargerID)
-	httpmock.RegisterResponder(http.MethodPost, chargerURI,
-		httpmock.NewStringResponder(202, "[]"))
-
-	err = e.Phases1p3p(1)
-	assert.NoError(t, err)
-
-	// Verify DCC:7 was sent to force a cloud-level value change
-	info := httpmock.GetCallCountInfo()
-	assert.Equal(t, 1, info["POST "+chargerURI], "expected one POST to charger settings with DCC:7")
-
-	// Verify c.current was set to 7
-	assert.Equal(t, 7.0, e.current, "c.current should be set to 7 after scale-down")
+	// automatic is not reported as 3p, so the loadpoint switches to lock it
+	for phaseMode, phases := range map[int]int{1: 1, 2: 0, 3: 3} {
+		e.phaseMode = phaseMode
+		res, err := e.GetPhases()
+		require.NoError(t, err)
+		assert.Equal(t, phases, res, "phaseMode %d", phaseMode)
+	}
 }
 
 func TestLivenessCheck_staleObservations(t *testing.T) {

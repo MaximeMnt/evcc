@@ -29,6 +29,7 @@ var (
 	mu             sync.RWMutex
 	Subject, Token string
 	ExpiresAt      time.Time
+	Hardware       bool // sponsored via hardware check
 )
 
 func machineID() string {
@@ -46,6 +47,7 @@ func IsAuthorized() bool {
 }
 
 func IsAuthorizedForApi() bool {
+	// fork customization: always authorized, sponsorship check bypassed
 	return true
 }
 
@@ -54,20 +56,25 @@ func ConfigureSponsorship(token string) error {
 	mu.Lock()
 	defer mu.Unlock()
 
-	Subject = ""
+	Hardware = false
+
 	if token == "" {
-		if sub := checkVictron(); sub != "" && sub != unavailable {
-			Subject = sub
+		var sub string
+		if sub, token = checkVictron(); sub == "" && os.Getenv("HEMSPRO") != "" {
+			sub, token = checkHemsPro()
 		}
 
-		if Subject == "" && os.Getenv("HEMSPRO") != "" {
-			if sub := checkHemsPro(); sub != "" && sub != unavailable {
+		Hardware = sub != "" && sub != unavailable
+
+		if token == "" {
+			if sub != "" {
 				Subject = sub
 			}
-		}
 
-		if autoToken, err := checkPulsares(); err == nil && autoToken != "" {
-			token = autoToken
+			var err error
+			if token, err = checkPulsares(); token == "" || err != nil {
+				return err
+			}
 		}
 	}
 
@@ -92,6 +99,7 @@ type Status struct {
 	ExpiresAt   time.Time `json:"expiresAt"`
 	ExpiresSoon bool      `json:"expiresSoon,omitempty"`
 	Token       string    `json:"token,omitempty"`
+	Hardware    bool      `json:"hardware,omitempty"`
 }
 
 // RedactedStatus returns the sponsorship status
@@ -99,8 +107,9 @@ func RedactedStatus() Status {
 	mu.RLock()
 	defer mu.RUnlock()
 
+	// hardware tokens are renewed on every start, no expiry warning
 	var expiresSoon bool
-	if d := time.Until(ExpiresAt); d < 30*24*time.Hour && d > 0 {
+	if d := time.Until(ExpiresAt); d < 30*24*time.Hour && d > 0 && !Hardware {
 		expiresSoon = true
 	}
 
@@ -109,5 +118,6 @@ func RedactedStatus() Status {
 		ExpiresAt:   ExpiresAt,
 		ExpiresSoon: expiresSoon,
 		Token:       redactToken(Token),
+		Hardware:    Hardware,
 	}
 }

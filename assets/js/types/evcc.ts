@@ -174,6 +174,11 @@ export interface State {
   forecast: Forecast;
   /** Configured currency for all monetary values. */
   currency?: CURRENCY;
+  /**
+   * Configured site country as ISO 3166-1 alpha-2 code. Empty when not set.
+   * @example "DE"
+   */
+  country?: string;
   /** Fatal startup errors. */
   fatal?: FatalError[];
   /** Status of configured vehicle authentication providers, keyed by provider name. */
@@ -222,6 +227,8 @@ export interface State {
   residualPower?: number;
   /** Static grid export power limit in W used as optimizer constraint, 0 = disabled. An active HEMS curtailment takes precedence. */
   gridExportLimit?: number;
+  /** Percentile of the historic energy profiles used for demand prediction in %, e.g. 50 = median. Null uses the average. */
+  profilePercentile?: number | null;
   /** Share of green energy in home consumption, between 0 and 1. */
   greenShareHome?: number;
   /** Share of green energy used for charging, between 0 and 1. */
@@ -272,6 +279,8 @@ export interface State {
   interval?: number;
   /** Load management circuits, keyed by circuit name. */
   circuits?: Record<string, Circuit>;
+  /** Load management configuration. */
+  circuitsConfig?: GenericConfigStatus;
   /** Battery buffer SoC in %. Energy above this level may be used for charging in solar mode. */
   bufferSoc?: number;
   /** Battery priority SoC in %. Home battery is charged first while below this level. */
@@ -323,6 +332,8 @@ export interface State {
   ocppforwarder?: OcppForwarder;
   /** Battery optimizer is enabled. */
   optimizer?: boolean;
+  /** What the optimizer controls instead of only advising: nothing, the home battery, or battery and loadpoints. */
+  optimizerAutomatic?: OPTIMIZER_AUTOMATIC;
   /** Selected battery optimizer charging strategy. */
   optimizerChargingStrategy?: string;
   /** Available battery optimizer charging strategies. */
@@ -432,6 +443,8 @@ export interface Config {
 
 /** A load management circuit limiting power and current of its assigned loadpoints. */
 export interface Circuit {
+  /** Circuit name used as configuration reference. */
+  name?: string;
   /** Circuit title for UI display. */
   title?: string;
   /** Circuit icon name for UI display. */
@@ -448,11 +461,11 @@ export interface Circuit {
   maxCurrent?: number;
 }
 
-export interface Entity {
+export interface Entity<C = never> {
   name: string;
   type: string;
   id: number;
-  config: Config;
+  config: Config | C;
   deviceDisable?: boolean;
 }
 
@@ -489,7 +502,17 @@ export interface ConfigMeter extends Entity {
   deviceIcon?: string;
 }
 
-export type ConfigCircuit = Entity;
+export interface ConfigCircuit extends Entity<{
+  maxcurrent?: number;
+  maxpower?: number;
+  meter?: string;
+  parent: string;
+  title?: string;
+}> {
+  deviceProduct: string;
+  deviceTitle?: string;
+  type: ConfigType;
+}
 
 export interface LoadpointThreshold {
   delay: number;
@@ -592,6 +615,10 @@ export interface Loadpoint {
   chargerFeatureCoarseCurrent: boolean;
   /** Charger is a heating device where disabled means normal operation. */
   chargerFeatureContinuous: boolean;
+  /** Heating device demand forecast uses daily average profile scaled by outdoor temperature. */
+  chargerFeatureDemandTemperature: boolean;
+  /** Heating device demand forecast uses same-weekday average over past 4 weeks. */
+  chargerFeatureDemandWeekday: boolean;
   /** Charger is a heating device. SoC values represent temperature in degrees. */
   chargerFeatureHeating: boolean;
   /** Charger is an always-connected device without vehicles and charging sessions, like a heat pump. */
@@ -671,6 +698,8 @@ export interface Loadpoint {
   mode: CHARGE_MODE;
   /** Current offered to the vehicle in A. */
   offeredCurrent: number;
+  /** Optimizer decides start/stop for this loadpoint, replacing the price limits. */
+  optimizerControlled: boolean;
   /** Pending phase switching action in solar mode. */
   phaseAction: PHASE_ACTION;
   /** Remaining time until the pending phase switching action executes, in seconds. */
@@ -834,6 +863,12 @@ export enum CURRENCY {
   KZT = "KZT",
 }
 
+/** ISO 3166-1 alpha-2 country codes, names resolved via Intl.DisplayNames. */
+export const COUNTRIES =
+  "AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW".split(
+    " "
+  );
+
 export enum ICON_SIZE {
   XS = "xs",
   S = "s",
@@ -847,6 +882,12 @@ export enum CHARGE_MODE {
   OFF = "off",
   SMART = "smart",
   NOW = "now",
+}
+
+export enum OPTIMIZER_AUTOMATIC {
+  OFF = "off",
+  BATTERY = "battery",
+  FULL = "full",
 }
 
 /** Always charge state. Smart mode charges continuously at least at minimum power. */
@@ -926,6 +967,8 @@ export interface SponsorStatus {
   expiresSoon?: boolean;
   /** Sponsor token. Redacted. */
   token?: string;
+  /** Hardware sponsorship. */
+  hardware?: boolean;
 }
 
 /** Sponsorship status. */
@@ -1172,6 +1215,8 @@ export interface BatterySuggestion {
   charge?: number;
   /** Recommended discharge power in W. */
   discharge?: number;
+  /** Planned site grid flow of the slot in W, positive means import. */
+  grid?: number;
   /** Suggestion differs from the current operating mode. */
   actionable?: boolean;
 }
@@ -1184,6 +1229,8 @@ export interface LoadpointSuggestion {
   charge?: number;
   /** Recommended discharge power in W. */
   discharge?: number;
+  /** Planned site grid flow of the slot in W, positive means import. */
+  grid?: number;
   /** Suggestion differs from the current operating mode. */
   actionable?: boolean;
 }
@@ -1194,6 +1241,8 @@ export interface BatteryMeter extends Meter {
   soc: number;
   /** Battery supports external control of its operation mode. */
   controllable: boolean;
+  /** Battery modes supported by the device. */
+  modes?: string[];
   /** Battery capacity in kWh. Zero when not specified. */
   capacity: number;
   /** Battery optimizer suggestion. */
@@ -1220,6 +1269,7 @@ export interface PlanWrapper {
   duration: number;
   plan: Rate[] | null;
   power: number;
+  optimizer?: boolean;
 }
 
 export interface PlanResponse {
@@ -1387,6 +1437,16 @@ export interface UiForecast {
   temperature?: UiForecastSlot[];
 }
 
+export interface ServiceOption {
+  value: string;
+  label?: string;
+  hint?: string;
+  match?: boolean;
+  used?: boolean;
+}
+
+export type ServiceValue = string | ServiceOption;
+
 export interface SelectOption<T> {
   name: string;
   value: T;
@@ -1402,8 +1462,17 @@ export type DeviceType =
   | "messenger"
   | "tariff"
   | "hems"
+  | "circuit"
   | "curtailer";
-export type MeterType = "grid" | "pv" | "battery" | "charge" | "aux" | "ext" | "consumer";
+export type MeterType =
+  | "grid"
+  | "pv"
+  | "battery"
+  | "charge"
+  | "aux"
+  | "ext"
+  | "consumer"
+  | "circuit";
 export type MeterTemplateUsage = "grid" | "pv" | "battery" | "charge" | "aux";
 export type TariffType = "grid" | "feedIn" | "co2" | "planner" | "solar" | "temperature";
 
@@ -1506,10 +1575,18 @@ export interface BatteryDetail {
   capacity: number; // Battery capacity (kWh)
 }
 
+// Single profile summarized into the household demand time series
+export interface DemandDetail {
+  type: "home" | "heating" | "unmodelled"; // Origin of the profile
+  title?: string; // Loadpoint title, unset for the base load
+  values: number[]; // Energy per slot (Wh)
+}
+
 // Optimization details with timestamps and battery information
 export interface OptimizationDetails {
   timestamp: string[]; // Array of ISO timestamp strings
   batteryDetails: BatteryDetail[]; // Array of battery detail objects
+  demandDetails: DemandDetail[] | null; // Profiles summarized into the household demand, null when there is nothing to break down
 }
 
 // Error response
