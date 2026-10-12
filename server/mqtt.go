@@ -232,6 +232,8 @@ func (m *MQTT) listenSiteSetters(topic string, site site.API) error {
 		{"prioritySoc", floatSetter(site.SetPrioritySoc)},
 		{"residualPower", floatSetter(site.SetResidualPower)},
 		{"gridExportLimit", floatSetter(site.SetGridExportLimit)},
+		{"peakFollowing", boolSetter(site.SetPeakFollowing)},
+		{"peakLimit", floatSetter(site.SetPeakLimit)},
 		{"solarAdjusted", boolSetter(pass(site.SetSolarAdjusted))},
 		{"smartCostLimit", floatPtrSetter(func(limit *float64) error {
 			return setLoadpointsLimit(site, loadpoint.API.SetSmartCostLimit, limit)

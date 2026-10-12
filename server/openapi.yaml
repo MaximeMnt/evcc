@@ -838,6 +838,30 @@ paths:
       responses:
         "200":
           $ref: "#/components/responses/NumberResult"
+  /peakfollowing/{enable}:
+    post:
+      operationId: setPeakFollowing
+      summary: Enable peak following
+      description: "Keep the quarter-hour average grid import at or below the peak limit, or the month's higher peak, for capacity tariffs like in Belgium. Requires a peak limit."
+      tags:
+        - general
+      parameters:
+        - $ref: "#/components/parameters/enable"
+      responses:
+        "200":
+          $ref: "#/components/responses/BooleanResult"
+  /peaklimit/{power}:
+    post:
+      operationId: setPeakLimit
+      summary: Set peak limit
+      description: "Set the quarter-hour average grid import limit in W used by peak following. 0 is only allowed while peak following is disabled."
+      tags:
+        - general
+      parameters:
+        - $ref: "#/components/parameters/power"
+      responses:
+        "200":
+          $ref: "#/components/responses/NumberResult"
   /solaradjusted/{enable}:
     post:
       operationId: setSolarAdjusted

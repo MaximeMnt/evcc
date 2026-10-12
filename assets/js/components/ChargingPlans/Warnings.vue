@@ -12,6 +12,9 @@
 		<span v-if="notReachableInTime" class="d-block text-warning mt-1">
 			{{ $t("main.targetCharge.notReachableInTime", { overrun: overrunFmt }) }}
 		</span>
+		<span v-if="planPeakConflict" class="d-block text-warning mt-1">
+			{{ $t("main.targetCharge.peakConflict") }}
+		</span>
 		<span v-if="targetIsAboveVehicleLimit" class="d-block text-warning mt-1">
 			{{ $t("main.targetCharge.targetIsAboveVehicleLimit") }}
 		</span>
@@ -41,6 +44,7 @@ export default defineComponent({
 		plan: Object as PropType<PlanWrapper>,
 		vehicleLimitSoc: Number,
 		planOverrun: Number,
+		planPeakConflict: Boolean,
 	},
 	computed: {
 		endTime(): Date | null {

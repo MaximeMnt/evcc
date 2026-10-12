@@ -95,6 +95,7 @@ type Site struct {
 
 	// grid settings
 	gridExportLimit float64 // static grid export power limit in W, 0 = disabled
+	peak            peakState
 
 	// forecast settings
 	solarAdjusted bool // adjust solar forecast to real production data
@@ -241,6 +242,7 @@ func (site *Site) Boot(log *util.Logger, loadpoints []*Loadpoint, tariffs *tarif
 	for _, lp := range site.activeLoadpoints() {
 		lp.coordinator = coordinator.NewAdapter(lp, site.coordinator)
 		lp.planner = planner.New(lp.log, tariff)
+		lp.peak = site
 
 		if db.Instance != nil {
 			var err error
@@ -499,6 +501,18 @@ func (site *Site) restoreSettings() error {
 			return err
 		}
 	}
+	if v, err := settings.Float(keys.PeakLimit); err == nil {
+		if err := site.SetPeakLimit(v); err != nil {
+			site.log.ERROR.Println(err)
+		}
+	}
+
+	if v, err := settings.Bool(keys.PeakFollowing); err == nil {
+		if err := site.SetPeakFollowing(v); err != nil {
+			site.log.ERROR.Println("peak following:", err)
+		}
+	}
+
 	if v, err := settings.Bool(keys.SolarAdjusted); err == nil {
 		site.SetSolarAdjusted(v)
 	}
@@ -1384,6 +1398,8 @@ func (site *Site) updatePower(lp updater, state siteState, totalChargePower floa
 	homePower = max(homePower, 0)
 	site.publish(keys.HomePower, homePower)
 
+	site.updatePeak(state.gridPower, homePower)
+
 	if homePower > 0 {
 		if err := site.collectors[metrics.Home].AddEnergy(nil, nil, homePower); err != nil {
 			site.log.ERROR.Printf("persist home consumption: %v", err)
@@ -1456,6 +1472,8 @@ func (site *Site) prepare() {
 	site.publish(keys.SolarAdjusted, site.solarAdjusted)
 	site.publish(keys.ResidualPower, site.GetResidualPower())
 	site.publish(keys.GridExportLimit, site.GetGridExportLimit())
+	site.publish(keys.PeakFollowing, site.GetPeakFollowing())
+	site.publish(keys.PeakLimit, site.GetPeakLimit())
 	site.publish(keys.ProfilePercentile, site.GetProfilePercentile())
 	site.publish(keys.SmartCostAvailable, site.isDynamicTariff(api.TariffUsagePlanner))
 	site.publish(keys.SmartFeedInPriorityAvailable, site.isDynamicTariff(api.TariffUsageFeedIn))

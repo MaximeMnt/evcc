@@ -165,6 +165,11 @@ type Loadpoint struct {
 	planActive       bool             // charge plan exists and has a currently active slot
 	planOverrunSent  bool             // notification has been sent already
 	planLocked       PlanLock         // locked plan
+	planPeakConflict bool             // plan cannot follow the demand peak until the plan time
+
+	// demand peak following, nil if not provided by the site
+	peak       peakLimiter
+	peakBypass bool // ignore the peak to reach min soc or a conflicting plan goal
 
 	// optimizer
 	suggestion        *types.Suggestion // optimizer suggestion for the current slot
@@ -1017,6 +1022,15 @@ func (lp *Loadpoint) setLimit(current float64) error {
 		current = limited
 	}
 
+	if powerLimit, ok := lp.peakPowerCap(); ok {
+		activePhases := lp.ActivePhases()
+		if requestedPower := currentToPower(current, activePhases); powerLimit < requestedPower {
+			limited := lp.roundedCurrent(powerToCurrent(powerLimit, activePhases))
+			lp.log.DEBUG.Printf("peak limit %.0fW caps current %.3gA at %.3gA", powerLimit, current, limited)
+			current = limited
+		}
+	}
+
 	// https://github.com/evcc-io/evcc/issues/16309
 	effMinCurrent := lp.effectiveMinCurrent()
 	if effMaxCurrent := lp.effectiveMaxCurrent(); effMinCurrent > effMaxCurrent {
@@ -1472,11 +1486,17 @@ func (lp *Loadpoint) scalePhases(phases int) error {
 
 // circuitAllowsPhases checks if the circuit power limit allows charging at minCurrent on phases
 func (lp *Loadpoint) circuitAllowsPhases(phases int, minCurrent float64) bool {
+	minPower := currentToPower(minCurrent, phases)
+
+	if powerLimit, ok := lp.peakPowerCap(); ok && powerLimit < minPower {
+		lp.log.DEBUG.Printf("available peak power %.0fW < %.0fW min %dp power", powerLimit, minPower, phases)
+		return false
+	}
+
 	if lp.circuit == nil {
 		return true
 	}
 
-	minPower := currentToPower(minCurrent, phases)
 	powerLimit := lp.circuit.ValidatePower(lp.chargePower, minPower)
 	if powerLimit < minPower {
 		lp.log.DEBUG.Printf("available circuit power %.0fW < %.0fW min %dp power", powerLimit, minPower, phases)
@@ -1508,7 +1528,7 @@ func (lp *Loadpoint) fastChargingPhases() (bool, error) {
 		return false, nil
 	}
 
-	if lp.circuit == nil {
+	if _, peakLimited := lp.peakPowerCap(); lp.circuit == nil && !peakLimited {
 		// ignore api.ErrNotAvailable: the phase switch could not be performed
 		// right now, continue with the current phase configuration
 		if err := lp.scalePhasesIfAvailable(3); err != nil && !errors.Is(err, api.ErrNotAvailable) {
@@ -2480,6 +2500,9 @@ NO_DIM:
 	// update and publish min soc not reached state
 	minSocNotReached := lp.minSocNotReached()
 	lp.publish(keys.MinSocNotReached, minSocNotReached)
+
+	// reaching min soc or the plan goal takes precedence over the demand peak
+	lp.peakBypass = minSocNotReached || plannerActive && lp.planPeakConflict
 
 	// execute loading strategy
 	switch {

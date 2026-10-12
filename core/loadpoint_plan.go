@@ -120,8 +120,14 @@ func (lp *Loadpoint) GetPlanGoal() (float64, bool) {
 // GetPlan creates a charging plan for given time and duration
 // The plan is sorted by time
 func (lp *Loadpoint) GetPlan(targetTime time.Time, requiredDuration, precondition time.Duration, continuous bool) api.Rates {
+	plan, _ := lp.getPlan(targetTime, requiredDuration, precondition, continuous)
+	return plan
+}
+
+// getPlan creates a charging plan and reports if it follows the demand peak
+func (lp *Loadpoint) getPlan(targetTime time.Time, requiredDuration, precondition time.Duration, continuous bool) (api.Rates, bool) {
 	if lp.planner == nil || targetTime.IsZero() {
-		return nil
+		return nil, true
 	}
 
 	pc := precondition.String()
@@ -132,20 +138,31 @@ func (lp *Loadpoint) GetPlan(targetTime time.Time, requiredDuration, preconditio
 	lp.log.TRACE.Printf("plan: creating plan with continuous=%v, precondition=%s, duration=%v, target=%v",
 		continuous, pc, requiredDuration.Round(time.Second), targetTime.Round(time.Second).Local())
 
-	return lp.planner.Plan(requiredDuration, precondition, targetTime, continuous)
+	if limit := lp.peakPlanLimit(); limit != nil {
+		return lp.planner.PlanLimited(requiredDuration, precondition, targetTime, continuous, lp.EffectiveMaxPower(), limit)
+	}
+
+	return lp.planner.Plan(requiredDuration, precondition, targetTime, continuous), true
 }
 
 // EffectivePlan returns the charging plan in effect. While in control the
 // optimizer schedules the plan itself, returned with its average power and
 // true. Everything else is the planner's.
 func (lp *Loadpoint) EffectivePlan(planTime time.Time, requiredDuration time.Duration, strategy api.PlanStrategy) (api.Rates, float64, bool) {
+	plan, power, optimized, _ := lp.effectivePlan(planTime, requiredDuration, strategy)
+	return plan, power, optimized
+}
+
+// effectivePlan is EffectivePlan, additionally reporting if the plan follows the demand peak
+func (lp *Loadpoint) effectivePlan(planTime time.Time, requiredDuration time.Duration, strategy api.PlanStrategy) (api.Rates, float64, bool, bool) {
 	if requiredDuration > 0 {
 		if plan, power := lp.OptimizerPlan(planTime); plan != nil {
-			return plan, power, true
+			return plan, power, true, true
 		}
 	}
 
-	return lp.GetPlan(planTime, requiredDuration, strategy.Precondition, strategy.Continuous), 0, false
+	plan, peakOk := lp.getPlan(planTime, requiredDuration, strategy.Precondition, strategy.Continuous)
+	return plan, 0, false, peakOk
 }
 
 // plannerActive checks if the charging plan has a currently active slot
@@ -157,12 +174,15 @@ func (lp *Loadpoint) plannerActive() (active bool) {
 	var plan api.Rates
 	var planStart, planEnd time.Time
 	var planOverrun time.Duration
+	peakOk := true
 
 	defer func() {
+		lp.planPeakConflict = !peakOk
 		lp.publish(keys.Plan, plan)
 		lp.publish(keys.PlanProjectedStart, planStart)
 		lp.publish(keys.PlanProjectedEnd, planEnd)
 		lp.publish(keys.PlanOverrun, planOverrun)
+		lp.publish(keys.PlanPeakConflict, lp.planPeakConflict)
 	}()
 
 	// re-check since plannerActive() is called before connected() check in Update()
@@ -199,7 +219,7 @@ func (lp *Loadpoint) plannerActive() (active bool) {
 
 	strategy := lp.getEffectivePlanStrategy()
 
-	plan, power, optimized := lp.EffectivePlan(planTime, requiredDuration, strategy)
+	plan, power, optimized, peakOk := lp.effectivePlan(planTime, requiredDuration, strategy)
 	if plan == nil {
 		lp.log.DEBUG.Println("!! plan: plan nil")
 		return false

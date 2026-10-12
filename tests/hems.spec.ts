@@ -191,6 +191,60 @@ maxconsumptionpower:
     await expect(input).not.toBeVisible();
   });
 
+  test("peak limit", async ({ page }) => {
+    const GRID_CONFIG = "hems-grid.evcc.yaml";
+    await start(GRID_CONFIG);
+    await page.goto("/#/config");
+    await enableExperimental(page);
+
+    const hemsModal = page.getByTestId("hems-modal");
+    const section = hemsModal.getByTestId("peak-limit");
+    const toggle = section.getByRole("switch", { name: "Grid import peak limit" });
+    const input = section.getByRole("spinbutton", { name: "Grid import peak limit" });
+    const staticTab = hemsModal.getByRole("link", { name: "Static limits" });
+
+    await page.getByTestId("hems").getByRole("button", { name: "edit" }).click();
+    await expectModalVisible(hemsModal);
+    await staticTab.click();
+
+    // disabled by default
+    await expect(toggle).not.toBeChecked();
+    await expect(input).not.toBeVisible();
+
+    // enable, set value, commit via Enter
+    await toggle.click();
+    await input.fill("4.5");
+    await input.press("Enter");
+    await expect(section.getByText("Saved.")).toBeVisible();
+
+    // measured state
+    await expect(section.getByText("This month's peak")).toBeVisible();
+    await expect(section.getByTestId("peak-quarter-hour")).toContainText("kW");
+
+    await hemsModal.getByRole("button", { name: "Close" }).click();
+    await expectModalHidden(hemsModal);
+
+    const hemsCard = page.getByTestId("hems");
+    await expect(hemsCard).toContainText("Peak limit");
+    await expect(hemsCard).toContainText("4.5 kW");
+
+    // persisted across restart
+    await restart(GRID_CONFIG);
+    await page.reload();
+    await page.getByTestId("hems").getByRole("button", { name: "edit" }).click();
+    await expectModalVisible(hemsModal);
+    await staticTab.click();
+    await expect(toggle).toBeChecked();
+    await expect(input).toHaveValue("4.5");
+
+    // switch off keeps the limit for later
+    await toggle.click();
+    await expect(input).not.toBeVisible();
+    await hemsModal.getByRole("button", { name: "Close" }).click();
+    await expectModalHidden(hemsModal);
+    await expect(page.getByTestId("hems")).not.toContainText("Peak limit");
+  });
+
   test("user-defined relay drives external limit without circuits", async ({ page }) => {
     const GRID_CONFIG = "hems-grid.evcc.yaml";
     await startSimulator();

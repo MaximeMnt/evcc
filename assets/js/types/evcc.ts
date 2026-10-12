@@ -227,6 +227,12 @@ export interface State {
   residualPower?: number;
   /** Static grid export power limit in W used as optimizer constraint, 0 = disabled. An active HEMS curtailment takes precedence. */
   gridExportLimit?: number;
+  /** Charging follows the month's quarter-hour grid import peak (capacity tariff). */
+  peakFollowing?: boolean;
+  /** Quarter-hour average grid import limit in W used by peak following. */
+  peakLimit?: number;
+  /** Demand peak state while peak following is active. */
+  peak?: PeakStatus | null;
   /** Percentile of the historic energy profiles used for demand prediction in %, e.g. 50 = median. Null uses the average. */
   profilePercentile?: number | null;
   /** Share of green energy in home consumption, between 0 and 1. */
@@ -514,6 +520,24 @@ export interface ConfigCircuit extends Entity<{
   type: ConfigType;
 }
 
+export interface PeakStatus {
+  /** Configured quarter-hour average grid import limit in W. */
+  limit: number;
+  /** Effective target in W. The limit, or this month's peak once it is higher. */
+  target: number;
+  /** Highest quarter-hour average grid import of this month in W. */
+  monthPeak: number;
+  /**
+   * Start of the quarter hour with this month's peak.
+   * @format date-time
+   */
+  monthPeakTime?: string;
+  /** Projected average grid import of the current quarter hour in W. */
+  projected: number;
+  /** This month's peak exceeds the limit. */
+  exceeded: boolean;
+}
+
 export interface LoadpointThreshold {
   delay: number;
   threshold: number;
@@ -716,6 +740,8 @@ export interface Loadpoint {
   planEnergy: number;
   /** Duration in seconds the charging plan is projected to miss its target time. */
   planOverrun: number;
+  /** The charging plan exceeds the peak limit to reach its goal in time. */
+  planPeakConflict: boolean;
   /** Charging plan strategy. */
   planStrategy: PlanStrategy;
   /**
