@@ -195,7 +195,6 @@ maxconsumptionpower:
     const GRID_CONFIG = "hems-grid.evcc.yaml";
     await start(GRID_CONFIG);
     await page.goto("/#/config");
-    await enableExperimental(page);
 
     const hemsModal = page.getByTestId("hems-modal");
     const section = hemsModal.getByTestId("peak-limit");
@@ -206,6 +205,9 @@ maxconsumptionpower:
     await page.getByTestId("hems").getByRole("button", { name: "edit" }).click();
     await expectModalVisible(hemsModal);
     await staticTab.click();
+
+    // available without experimental, unlike the export limit
+    await expect(hemsModal.getByTestId("grid-export-limit")).not.toBeVisible();
 
     // disabled by default
     await expect(toggle).not.toBeChecked();

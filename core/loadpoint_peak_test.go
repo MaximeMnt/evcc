@@ -14,17 +14,24 @@ import (
 )
 
 type fakePeak struct {
-	budget float64
-	active bool
-	limit  planner.PowerLimit
+	budget   float64
+	active   bool
+	limit    planner.PowerLimit
+	reserved *api.Rates
 }
 
 func (p fakePeak) peakBudget() (float64, bool) {
 	return p.budget, p.active
 }
 
-func (p fakePeak) peakPowerLimit() planner.PowerLimit {
+func (p fakePeak) peakPowerLimit(_ any) planner.PowerLimit {
 	return p.limit
+}
+
+func (p fakePeak) peakReserve(_ any, plan api.Rates) {
+	if p.reserved != nil {
+		*p.reserved = plan
+	}
 }
 
 func TestPeakCapsCurrent(t *testing.T) {
@@ -97,4 +104,46 @@ func TestPeakPlanLimitMinPower(t *testing.T) {
 
 	power = minA*230 - 1
 	assert.Equal(t, 0.0, limit(time.Time{}, time.Time{}), "below min power")
+}
+
+func TestReservePeak(t *testing.T) {
+	Voltage = 230
+
+	start := time.Date(2026, 10, 12, 22, 0, 0, 0, time.UTC)
+	plan := api.Rates{
+		{Start: start, End: start.Add(15 * time.Minute), Value: 0.1},
+		{Start: start.Add(15 * time.Minute), End: start.Add(30 * time.Minute), Value: 0.2},
+	}
+	available := func(from, _ time.Time) float64 {
+		if from.Equal(start) {
+			return 2e3
+		}
+		return 20e3
+	}
+
+	var reserved api.Rates
+
+	lp := NewLoadpoint(util.NewLogger("foo"), nil)
+	lp.minCurrent = minA
+	lp.maxCurrent = maxA
+	lp.phases = 1
+	lp.peak = fakePeak{active: true, limit: available, reserved: &reserved}
+
+	maxPower := 230 * maxA
+
+	lp.reservePeak(plan, false, true)
+	assert.Equal(t, api.Rates{
+		{Start: plan[0].Start, End: plan[0].End, Value: 2e3},
+		{Start: plan[1].Start, End: plan[1].End, Value: maxPower},
+	}, reserved, "derated plan")
+
+	lp.reservePeak(plan, false, false)
+	assert.Equal(t, maxPower, reserved[0].Value, "conflicting plan charges unlimited")
+
+	lp.reservePeak(plan, true, true)
+	assert.Nil(t, reserved, "optimizer plan")
+
+	lp.reservePeak(plan, false, true)
+	lp.reservePeak(nil, false, true)
+	assert.Nil(t, reserved, "no plan")
 }

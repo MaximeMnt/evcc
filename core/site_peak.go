@@ -6,6 +6,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/evcc-io/evcc/api"
 	"github.com/evcc-io/evcc/core/keys"
 	"github.com/evcc-io/evcc/core/metrics"
 	"github.com/evcc-io/evcc/core/peak"
@@ -18,8 +19,10 @@ import (
 type peakLimiter interface {
 	// peakBudget returns the import power in W the loadpoints may add right now
 	peakBudget() (float64, bool)
-	// peakPowerLimit returns the import power in W left for charging per planning window
-	peakPowerLimit() planner.PowerLimit
+	// peakPowerLimit returns the import power in W left for the owner's charging per planning window
+	peakPowerLimit(owner any) planner.PowerLimit
+	// peakReserve registers the owner's planned charging power in W, nil releases it
+	peakReserve(owner any, plan api.Rates)
 }
 
 var _ peakLimiter = (*Site)(nil)
@@ -42,12 +45,20 @@ type peakState struct {
 	slot          time.Time // quarter hour the cached values below were computed for
 	monthPeak     float64   // W
 	monthPeakTime time.Time
-	home          []float64 // forecast household import per quarter hour from slot in W
-	budget        float64   // W the loadpoints may add right now
+	home          []float64 // forecast household consumption per quarter hour from slot in W
+	solar         api.Rates // solar forecast power in W
+	solarScale    float64
+	budget        float64 // W the loadpoints may add right now
 	active        bool
+
+	reserved map[any]api.Rates // planned charging power per loadpoint in W
 }
 
 var ErrPeakLimitNotSet = errors.New("peak limit not set")
+
+// peakExcessPrice is the cost per W of raising the month peak, as a Flemish capacity tariff of about
+// 50 EUR/kW/year enters the billed 12-month average with 1/12 of each month's peak
+const peakExcessPrice = 50.0 / 12 / 1e3
 
 // GetPeakFollowing returns if peak following is enabled
 func (site *Site) GetPeakFollowing() bool {
@@ -150,6 +161,7 @@ func (site *Site) updatePeakFrom(col slotEnergyCollector, ts time.Time, gridPowe
 	site.RLock()
 	cached := slot.Equal(site.peak.slot)
 	monthPeak, monthPeakTime, home := site.peak.monthPeak, site.peak.monthPeakTime, site.peak.home
+	solar, solarScale := site.peak.solar, site.peak.solarScale
 	site.RUnlock()
 
 	if !cached {
@@ -160,6 +172,7 @@ func (site *Site) updatePeakFrom(col slotEnergyCollector, ts time.Time, gridPowe
 		monthPeak, monthPeakTime = energy*1e3/peak.Interval.Hours(), at
 
 		home = site.peakHomeForecast(homePower)
+		solar, solarScale = site.peakSolarForecast()
 	}
 
 	target := peak.Target(limit, monthPeak)
@@ -173,6 +186,7 @@ func (site *Site) updatePeakFrom(col slotEnergyCollector, ts time.Time, gridPowe
 	site.peak.slot = slot
 	site.peak.monthPeak, site.peak.monthPeakTime = monthPeak, monthPeakTime
 	site.peak.home = home
+	site.peak.solar, site.peak.solarScale = solar, solarScale
 	site.peak.budget = headroom - gridPower
 	site.peak.active = true
 	site.Unlock()
@@ -227,9 +241,40 @@ func (site *Site) peakBudget() (float64, bool) {
 	return site.peak.budget, site.peak.active
 }
 
-// peakPowerLimit implements peakLimiter. Household import is taken from the forecast profile,
-// planned charging of other loadpoints is not accounted for.
-func (site *Site) peakPowerLimit() planner.PowerLimit {
+// peakSolarForecast returns the solar forecast and the scale applied to it
+func (site *Site) peakSolarForecast() (api.Rates, float64) {
+	if site.tariffs == nil {
+		return nil, 0
+	}
+	return currentRates(site.GetTariff(api.TariffUsageSolar)), site.effectiveSolarScale()
+}
+
+// peakReserve implements peakLimiter
+func (site *Site) peakReserve(owner any, plan api.Rates) {
+	site.Lock()
+	defer site.Unlock()
+
+	if len(plan) == 0 {
+		delete(site.peak.reserved, owner)
+		return
+	}
+
+	if site.peak.reserved == nil {
+		site.peak.reserved = make(map[any]api.Rates)
+	}
+	site.peak.reserved[owner] = plan
+}
+
+// peakTarget returns the effective peak target in W if peak following is active
+func (site *Site) peakTarget() (float64, bool) {
+	site.RLock()
+	defer site.RUnlock()
+	return peak.Target(site.peak.limit, site.peak.monthPeak), site.peak.active
+}
+
+// peakPowerLimit implements peakLimiter. Grid import is projected from the household profile
+// less the solar forecast plus the charging other loadpoints have planned.
+func (site *Site) peakPowerLimit(owner any) planner.PowerLimit {
 	site.RLock()
 	defer site.RUnlock()
 
@@ -238,8 +283,15 @@ func (site *Site) peakPowerLimit() planner.PowerLimit {
 	}
 
 	limit, monthPeak, slot := site.peak.limit, site.peak.monthPeak, site.peak.slot
-	home := site.peak.home
+	home, solar, solarScale := site.peak.home, site.peak.solar, site.peak.solarScale
 	monthEnd := now.With(slot).EndOfMonth()
+
+	var others []api.Rates
+	for o, plan := range site.peak.reserved {
+		if o != owner {
+			others = append(others, plan)
+		}
+	}
 
 	return func(start, end time.Time) float64 {
 		res := math.MaxFloat64
@@ -252,9 +304,31 @@ func (site *Site) peakPowerLimit() planner.PowerLimit {
 			}
 
 			idx := int(ts.Sub(slot) / peak.Interval)
-			res = min(res, target-home[(idx%len(home)+len(home))%len(home)])
+			imp := home[(idx%len(home)+len(home))%len(home)]
+
+			if len(solar) > 0 {
+				imp = max(0, imp-solarScale*solarEnergy(solar, ts, ts.Add(peak.Interval))/peak.Interval.Hours())
+			}
+
+			for _, plan := range others {
+				imp += averagePower(plan, ts, ts.Add(peak.Interval))
+			}
+
+			res = min(res, target-imp)
 		}
 
 		return max(0, res)
 	}
+}
+
+// averagePower returns the average power in W of the plan's slots over [from, to)
+func averagePower(plan api.Rates, from, to time.Time) float64 {
+	var energy float64
+	for _, r := range plan {
+		start, end := max(r.Start.UnixNano(), from.UnixNano()), min(r.End.UnixNano(), to.UnixNano())
+		if end > start {
+			energy += r.Value * float64(end-start)
+		}
+	}
+	return energy / float64(to.Sub(from))
 }
